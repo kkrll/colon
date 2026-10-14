@@ -192,7 +192,7 @@ def ask(argv):
                         what = i.get("file_path") or i.get("pattern") or i.get("path") or ""
                         if what.startswith("/"):
                             what = os.path.relpath(what)
-                        print(dim(f"\n· {c['name']} {what}"), flush=True)
+                        print(dim(f"\n· {c['name']} {CONTROL.sub('', what)}"), flush=True)
             elif ev.get("type") == "result":
                 result = ev.get("result") or ""
     except KeyboardInterrupt:
