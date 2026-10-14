@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""colon: ask Claude about the command you just ran, inline, with `: question`.
+
+  colon shell ZSH    run ZSH under a pty that remembers the last command's output
+  colon ask ...      stream Claude's answer inline (called by colon.zsh)
+"""
+import argparse, fcntl, json, os, pty, re, select, signal, socket
+import subprocess, sys, tempfile, termios, threading, tty
+from collections import deque
+
+LINES = 200
+# colon.zsh prints OSC 133 C when a command starts and D when it ends.
+MARK = re.compile(rb"\x1b\]133;([CD])[^\x07\x1b]*\x07?")
+ANSI = re.compile(r"\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-Z\\-_])")
+
+
+class Ring:
+    """The last command's output, its last LINES lines, in memory only."""
+
+    def __init__(self):
+        self.lines, self.part, self.carry = deque(maxlen=LINES), b"", b""
+        self.on, self.lock = False, threading.Lock()
+
+    def feed(self, data):
+        with self.lock:
+            data, self.carry = self.carry + data, b""
+            esc = data.rfind(b"\x1b", -8)
+            if esc != -1 and any(m.startswith(data[esc:]) for m in (b"\x1b]133;C", b"\x1b]133;D")):
+                data, self.carry = data[:esc], data[esc:]  # a marker split across reads
+            pos = 0
+            for m in MARK.finditer(data):
+                if self.on:
+                    self._add(data[pos:m.start()])
+                if m[1] == b"C":
+                    self.lines.clear()
+                    self.part, self.on = b"", True
+                else:
+                    self.on = False
+                pos = m.end()
+            if self.on:
+                self._add(data[pos:])
+
+    def _add(self, data):
+        *done, self.part = (self.part + data).split(b"\n")
+        self.lines.extend(done)
+        self.part = self.part[-4096:]
+
+    def take(self):
+        """Hand the output over once, and forget it."""
+        with self.lock:
+            raw = list(self.lines) + ([self.part] if self.part else [])
+            self.lines.clear()
+            self.part = b""
+        # Keep what a terminal would show: no colour codes, and a progress bar's last frame only.
+        out = [ANSI.sub("", b.decode(errors="replace")).rstrip("\r").rsplit("\r", 1)[-1] for b in raw]
+        return "\n".join(out).strip()
+
+
+def put(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+
+
+def winsize(fd):
+    return fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8)
+
+
+def shell(argv):
+    if not os.isatty(0):
+        os.execvp(argv[0], argv)
+    home = tempfile.mkdtemp(prefix="colon-")  # random name, this user only
+    path = os.path.join(home, "sock")
+    size = winsize(0)
+    pid, fd = pty.fork()
+    if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, size)
+        os.environ["COLON_SOCK"] = path
+        os.execvp(argv[0], argv)
+
+    ring = Ring()
+    srv = socket.socket(socket.AF_UNIX)
+    old = os.umask(0o177)  # the socket is readable by this user only
+    srv.bind(path)
+    os.umask(old)
+    srv.listen()
+
+    def serve():
+        while True:
+            conn, _ = srv.accept()
+            with conn:
+                conn.sendall(ring.take().encode())
+
+    threading.Thread(target=serve, daemon=True).start()
+    signal.signal(signal.SIGWINCH, lambda *_: fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize(0)))
+
+    saved = termios.tcgetattr(0)
+    tty.setraw(0)
+    try:
+        while True:
+            ready, _, _ = select.select([0, fd], [], [])
+            if fd in ready:
+                try:
+                    data = os.read(fd, 65536)
+                except OSError:  # the shell exited
+                    break
+                if not data:
+                    break
+                put(1, data)
+                ring.feed(data)
+            if 0 in ready:
+                data = os.read(0, 65536)
+                if not data:
+                    break
+                put(fd, data)
+    finally:
+        termios.tcsetattr(0, termios.TCSAFLUSH, saved)
+        os.unlink(path)
+        os.rmdir(home)
+    sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+
+
+def take():
+    path = os.environ.get("COLON_SOCK")
+    if not path:
+        return ""
+    try:
+        with socket.socket(socket.AF_UNIX) as s:
+            s.connect(path)
+            chunks = []
+            while chunk := s.recv(65536):
+                chunks.append(chunk)
+        return b"".join(chunks).decode()
+    except OSError:
+        return ""
+
+
+PROMPT = """You are called inline from the user's zsh prompt with `: <question>`, usually about a \
+command that just went wrong. Your reply prints straight into their terminal: keep it to a few short \
+lines, no headings. You may read and edit files to fix things. You cannot run shell commands; when \
+the fix needs one, end your reply with exactly one line `$ <command>` and it will be placed at the \
+user's prompt, ready to run."""
+
+
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # keeps \t and \n; drops escapes echoed from output
+
+
+def dim(s):
+    return f"\x1b[2m{s}\x1b[0m"
+
+
+def ask(argv):
+    p = argparse.ArgumentParser(prog="colon ask")
+    p.add_argument("--session", required=True)
+    p.add_argument("--resume", action="store_true")
+    p.add_argument("--cmd")
+    p.add_argument("--code", default="0")
+    p.add_argument("--suggest", required=True, help="file to write a suggested command to")
+    p.add_argument("question", nargs="*")
+    a = p.parse_args(argv)
+
+    parts = [f"cwd: {os.getcwd()}"]
+    if a.cmd:
+        output = take()
+        parts.append(f"last command (exit {a.code}): {a.cmd}" + (f"\noutput:\n{output}" if output else ""))
+    parts.append(" ".join(a.question) or "What went wrong? Fix it.")
+
+    cmd = ["claude", "-p", "\n\n".join(parts),
+           "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+           "--permission-mode", "acceptEdits", "--disallowedTools", "Bash",
+           "--append-system-prompt", PROMPT,
+           "--resume" if a.resume else "--session-id", a.session]
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+    except FileNotFoundError:
+        sys.exit("colon: `claude` is not on PATH")
+
+    result = ""
+    try:
+        for line in proc.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "stream_event":
+                e = ev["event"]
+                if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta":
+                    print(CONTROL.sub("", e["delta"]["text"]), end="", flush=True)
+            elif ev.get("type") == "assistant":
+                for c in ev["message"].get("content", []):
+                    if c.get("type") == "tool_use":
+                        i = c.get("input", {})
+                        what = i.get("file_path") or i.get("pattern") or i.get("path") or ""
+                        if what.startswith("/"):
+                            what = os.path.relpath(what)
+                        print(dim(f"\n· {c['name']} {what}"), flush=True)
+            elif ev.get("type") == "result":
+                result = ev.get("result") or ""
+    except KeyboardInterrupt:
+        proc.terminate()
+    print()
+
+    for line in reversed(result.splitlines()):
+        if line.strip().startswith("$ "):
+            with open(a.suggest, "w") as f:
+                f.write(CONTROL.sub("", line.strip()[2:]))
+            break
+    sys.exit(proc.wait())
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["shell"] and sys.argv[2:]:
+        shell(sys.argv[2:])
+    elif sys.argv[1:2] == ["ask"]:
+        ask(sys.argv[2:])
+    else:
+        sys.exit(__doc__)
