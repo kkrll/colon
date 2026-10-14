@@ -16,6 +16,7 @@ The lockfile pins pnpm 9 but … fixed the `packageManager` field.
 - Claude sees the last command, its exit code and **its output**, and may read and edit files.
   It can't run commands. When a command is the fix, it's placed at your prompt for you to run.
 - One conversation per terminal window: later `:` questions are follow-ups. `:new` starts over.
+- Answers are tinted orange. Set `COLON_COLOR` to another SGR code (`36`, `38;5;110`), or to empty for none.
 
 ## Install
 

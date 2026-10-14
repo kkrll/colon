@@ -148,6 +148,13 @@ def dim(s):
     return f"\x1b[2m{s}\x1b[0m"
 
 
+TINT = os.environ.get("COLON_COLOR", "38;5;173")  # an SGR code; empty for no tint
+
+
+def tint(s):
+    return f"\x1b[{TINT}m{s}\x1b[0m" if TINT else s
+
+
 def ask(argv):
     p = argparse.ArgumentParser(prog="colon ask")
     p.add_argument("--session", required=True)
@@ -184,7 +191,7 @@ def ask(argv):
             if ev.get("type") == "stream_event":
                 e = ev["event"]
                 if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta":
-                    print(CONTROL.sub("", e["delta"]["text"]), end="", flush=True)
+                    print(tint(CONTROL.sub("", e["delta"]["text"])), end="", flush=True)
             elif ev.get("type") == "assistant":
                 for c in ev["message"].get("content", []):
                     if c.get("type") == "tool_use":
