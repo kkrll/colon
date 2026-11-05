@@ -1,5 +1,32 @@
 # colon
 
+```
+                               :::::::
+ ::::::                     :::::::::::
+ :::::::::::             :::::::::::::
+ :::::::::::::::::::::::::::::::::::::
+  :::  :::::::::::::::::::::::::::::::
+  ::::   :::::::::::::::::::::  ::::::
+  :::::          ::::           ::::::
+ ::::::                         :::::::
+ ::::::                         :::::::
+ ::::::          hello          :::::::
+:::::::           from          ::::::::
+::::::::         colon          ::::::::
+:::::::::                        ::::::::
+:::::::::::                     :::::::::
+:::::::::::::                   ::::::::
+ ::::::::::::                  :::::::::
+  ::::::::::           ::::::::::::::::
+    :::::  :       ::::::::::::::::::::
+            :     :::::::::::::::::::
+            :     ::::::::::::::::
+                   :::::
+                   :::::
+                   :::::
+                     ::
+```
+
 Ask Claude about the command you just ran, without leaving the prompt.
 
 ```
@@ -41,7 +68,7 @@ every byte through unchanged. zsh marks where each command's output starts and e
 (OSC 133 `C` / `D`, the same marks terminals use for jump-to-prompt). The wrapper keeps:
 
 - **only the last command's output.** It's cleared when the next command starts.
-- **only its last 200 lines**, in memory. Nothing is written to disk.
+- **only its last 300 lines**, in memory. Nothing is written to disk.
 - **until it's read once.** `:` takes it over a socket only your user can open, and then it's gone.
 
 Output leaves your machine only when you type `:`. If the last command printed a secret, don't ask.

@@ -8,7 +8,7 @@ import argparse, fcntl, json, os, pty, re, select, signal, socket
 import subprocess, sys, tempfile, termios, threading, tty
 from collections import deque
 
-LINES = 200
+LINES = 300
 # colon.zsh prints OSC 133 C when a command starts and D when it ends.
 MARK = re.compile(rb"\x1b\]133;([CD])[^\x07\x1b]*\x07?")
 ANSI = re.compile(r"\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-Z\\-_])")
@@ -135,10 +135,10 @@ def take():
 
 
 PROMPT = """You are called inline from the user's zsh prompt with `: <question>`, usually about a \
-command that just went wrong. Your reply prints straight into their terminal: keep it to a few short \
+command that just went wrong or needs some help with the shell script. Your reply prints straight into their terminal: keep it to a few short \
 lines, no headings. You may read and edit files to fix things. You cannot run shell commands; when \
 the fix needs one, end your reply with exactly one line `$ <command>` and it will be placed at the \
-user's prompt, ready to run."""
+user's prompt, ready to run. If asked who or what you are, say: I'm Claude, talking from your colon."""
 
 
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # keeps \t and \n; drops escapes echoed from output
@@ -177,7 +177,9 @@ def ask(argv):
            "--append-system-prompt", PROMPT,
            "--resume" if a.resume else "--session-id", a.session]
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+        # claude can't verify TLS with --use-openssl-ca, and an alias for that wouldn't reach us here.
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True,
+                                env={**os.environ, "NODE_OPTIONS": ""})
     except FileNotFoundError:
         sys.exit("colon: `claude` is not on PATH")
 
@@ -202,6 +204,8 @@ def ask(argv):
                         print(dim(f"\n· {c['name']} {CONTROL.sub('', what)}"), flush=True)
             elif ev.get("type") == "result":
                 result = ev.get("result") or ""
+                if ev.get("is_error"):  # errors arrive here, never as text deltas
+                    print(CONTROL.sub("", result), end="", file=sys.stderr, flush=True)
     except KeyboardInterrupt:
         proc.terminate()
     print()
