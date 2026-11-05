@@ -3,6 +3,7 @@
 
   colon shell ZSH    run ZSH under a pty that remembers the last command's output
   colon ask ...      stream Claude's answer inline (called by colon.zsh)
+  colon art          say hello
 """
 import argparse, fcntl, json, os, pty, re, select, signal, socket
 import subprocess, sys, tempfile, termios, threading, tty
@@ -155,6 +156,33 @@ def tint(s):
     return f"\x1b[{TINT}m{s}\x1b[0m" if TINT else s
 
 
+ART = """\
+                               :::::::
+ ::::::                     :::::::::::
+ :::::::::::             :::::::::::::
+ :::::::::::::::::::::::::::::::::::::
+  :::  :::::::::::::::::::::::::::::::
+  ::::   :::::::::::::::::::::  ::::::
+  :::::          ::::           ::::::
+ ::::::                         :::::::
+ ::::::                         :::::::
+ ::::::          hello          :::::::
+:::::::           from          ::::::::
+::::::::         colon          ::::::::
+:::::::::                        ::::::::
+:::::::::::                     :::::::::
+:::::::::::::                   ::::::::
+ ::::::::::::                  :::::::::
+  ::::::::::           ::::::::::::::::
+    :::::  :       ::::::::::::::::::::
+            :     :::::::::::::::::::
+            :     ::::::::::::::::
+                   :::::
+                   :::::
+                   :::::
+                     ::"""
+
+
 def ask(argv):
     p = argparse.ArgumentParser(prog="colon ask")
     p.add_argument("--session", required=True)
@@ -223,5 +251,7 @@ if __name__ == "__main__":
         shell(sys.argv[2:])
     elif sys.argv[1:2] == ["ask"]:
         ask(sys.argv[2:])
+    elif sys.argv[1:2] == ["art"]:
+        print(tint(ART))
     else:
         sys.exit(__doc__)

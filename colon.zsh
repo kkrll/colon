@@ -27,15 +27,17 @@ autoload -Uz add-zsh-hook
 add-zsh-hook preexec _colon_preexec
 precmd_functions=(_colon_precmd $precmd_functions)  # first, so $? is still the command's
 
-# `: question` asks; `:new` starts a fresh session. Anything else is a normal Enter.
+# `: question` asks; `:new` starts a fresh session; `:colon` says hello. Anything else is a normal Enter.
 _colon_accept_line() {
-  [[ $BUFFER == ': '* || $BUFFER == ':new' ]] || { zle accept-line; return }
+  [[ $BUFFER == ': '* || $BUFFER == ':new' || $BUFFER == ':colon' ]] || { zle accept-line; return }
   local q=${BUFFER#:} fix=$(mktemp)
   print -s -- "$BUFFER"
   print
   if [[ $q == new ]]; then
     _COLON_SID= _COLON_STARTED=
     print -P '%F{8}new session%f'
+  elif [[ $q == colon ]]; then
+    "$_COLON_BIN" art
   else
     [[ -n $_COLON_SID ]] || _COLON_SID=$(uuidgen | tr A-Z a-z)
     local -a args=(--session $_COLON_SID --suggest $fix)
